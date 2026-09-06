@@ -2,7 +2,7 @@ import os
 import io
 import base64
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -20,7 +20,6 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 # Lazy/Singleton initialization of the ML pipeline service
 pipeline_service = None
@@ -40,9 +39,10 @@ async def startup_event():
     get_pipeline()
     print("[+] Pipeline Service loaded and ready for inference.")
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_dashboard(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.get("/", response_class=FileResponse)
+async def serve_dashboard():
+    index_path = os.path.join(TEMPLATES_DIR, "index.html")
+    return FileResponse(index_path)
 
 @app.get("/health")
 async def health_check():
