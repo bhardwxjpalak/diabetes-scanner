@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ConjuVascular | Non-Invasive Diabetes Screening</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-container">
+            <div class="brand">
+                <span class="logo-icon">👁️</span>
+                <div>
+                    <h1>ConjuVascular</h1>
+                    <span class="tagline">Conjunctival Microvascular Diabetes Screening</span>
+                </div>
+            </div>
+            <div class="system-status">
+                <span class="status-dot"></span>
+                <span>AI Pipeline Active</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- Input Selection Section -->
+        <section class="card input-section" id="inputSection">
+            <div class="section-title">
+                <h2>1. Patient Ocular Capture</h2>
+                <p>Upload a high-resolution conjunctiva photograph or capture directly using the camera.</p>
+            </div>
+
+            <div class="tabs">
+                <button class="tab-btn active" id="tabUpload">Upload Image</button>
+                <button class="tab-btn" id="tabCamera">Live Camera</button>
+            </div>
+
+            <!-- Upload Area -->
+            <div class="tab-content active" id="contentUpload">
+                <div class="dropzone" id="dropzone">
+                    <div class="dropzone-content">
+                        <span class="upload-icon">📁</span>
+                        <p class="primary-text">Drag & drop eye image here, or <strong>browse files</strong></p>
+                        <p class="sub-text">Supports JPEG, PNG from smartphones or slit-lamps</p>
+                        <input type="file" id="fileInput" accept="image/*" style="display: none;">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Camera Area -->
+            <div class="tab-content" id="contentCamera">
+                <div class="camera-wrapper">
+                    <video id="webcam" autoplay playsinline muted></video>
+                    <div class="reticle-overlay"></div>
+                    <div class="camera-controls">
+                        <button class="btn btn-primary" id="btnCapture">📸 Capture Eye</button>
+                        <button class="btn btn-secondary" id="btnSwitchCamera">🔄 Switch</button>
+                    </div>
+                    <canvas id="captureCanvas" style="display: none;"></canvas>
+                </div>
+            </div>
+
+            <!-- Selected Image Preview -->
+            <div class="preview-bar" id="previewBar" style="display: none;">
+                <img id="selectedPreview" alt="Selected Preview">
+                <div class="preview-info">
+                    <span id="previewName">image.jpg</span>
+                    <span id="previewSize">-- KB</span>
+                </div>
+                <button class="btn btn-action" id="btnRunScreening">⚡ Run Screening Pipeline</button>
+            </div>
+        </section>
+
+        <!-- Pipeline Progress Tracker -->
+        <section class="card progress-card" id="progressCard" style="display: none;">
+            <div class="progress-header">
+                <div class="spinner"></div>
+                <div>
+                    <h3 id="progressStageTitle">Analyzing Image...</h3>
+                    <p id="progressStageSubtitle">Running Stage 1 Quality Check</p>
+                </div>
+            </div>
+            <div class="stepper">
+                <div class="step active" id="step1">1. Quality</div>
+                <div class="step" id="step2">2. CLAHE</div>
+                <div class="step" id="step3">3. ROI</div>
+                <div class="step" id="step4">4. Vessels</div>
+                <div class="step" id="step5">5. Features</div>
+                <div class="step" id="step6">6. Triage</div>
+            </div>
+        </section>
+
+        <!-- Error Notification Banner -->
+        <div class="alert alert-error" id="errorBanner" style="display: none;">
+            <span class="alert-icon">⚠️</span>
+            <div class="alert-body">
+                <strong id="errorTitle">Quality Check Failed</strong>
+                <p id="errorMessage">Image is blurry. Please hold steady and recapture.</p>
+            </div>
+            <button class="alert-close" id="btnCloseError">&times;</button>
+        </div>
+
+        <!-- Results Section -->
+        <section class="results-container" id="resultsContainer" style="display: none;">
+            <!-- Triage Summary Card -->
+            <div class="card triage-card" id="triageCard">
+                <div class="triage-badge" id="triageBadge">
+                    <span class="triage-icon" id="triageIcon">✓</span>
+                    <div>
+                        <h2 id="triageTitle">Healthy Vasculature</h2>
+                        <p id="triageDesc">No significant microvascular alterations detected.</p>
+                    </div>
+                </div>
+                <div class="triage-meta">
+                    <div class="meta-item">
+                        <span class="label">Assessed Risk</span>
+                        <span class="value" id="triageRiskValue">14.2%</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="label">Decision Threshold</span>
+                        <span class="value">0.53</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="label">Clinical Grade</span>
+                        <span class="value">Validated (4-Feature)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid-two-col">
+                <!-- CVHI Gauge Card -->
+                <div class="card gauge-card">
+                    <div class="card-header">
+                        <h3>Conjunctival Vascular Health Index (CVHI)</h3>
+                        <span class="badge-pill">SHAP-Weighted</span>
+                    </div>
+                    <div class="gauge-wrapper">
+                        <div class="score-circle">
+                            <span class="cvhi-number" id="cvhiScore">82</span>
+                            <span class="cvhi-max">/ 100</span>
+                        </div>
+                        <p class="gauge-caption" id="cvhiCaption">High vascular resilience</p>
+                    </div>
+                </div>
+
+                <!-- 4 Biomarkers Breakdown -->
+                <div class="card biomarkers-card">
+                    <div class="card-header">
+                        <h3>Microvascular Biomarkers</h3>
+                        <span class="badge-pill">Centerline Metrics</span>
+                    </div>
+                    <table class="biomarker-table">
+                        <thead>
+                            <tr>
+                                <th>Biomarker</th>
+                                <th>Measured</th>
+                                <th>SHAP Weight</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>TVL</strong> (Total Vessel Length)</td>
+                                <td id="valTVL">-- px</td>
+                                <td>43.7% (+w1)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>MBA</strong> (Mean Branching Angle)</td>
+                                <td id="valMBA">--°</td>
+                                <td>30.5% (+w2)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>FD</strong> (Fractal Dimension)</td>
+                                <td id="valFD">--</td>
+                                <td>4.0% (+w3)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>LAC</strong> (Lacunarity)</td>
+                                <td id="valLAC">--</td>
+                                <td>21.8% (-w4)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Segmentation Mask Visualizer -->
+            <div class="card visualizer-card">
+                <div class="card-header">
+                    <h3>Deep Learning Segmentation Overlays</h3>
+                    <div class="mask-tabs">
+                        <button class="mask-tab-btn active" data-target="vessel_overlay">Vessels Overlay</button>
+                        <button class="mask-tab-btn" data-target="roi_overlay">Sclera ROI</button>
+                        <button class="mask-tab-btn" data-target="vessel_mask">Binary Mask</button>
+                        <button class="mask-tab-btn" data-target="skeleton">Skeleton</button>
+                    </div>
+                </div>
+                <div class="mask-viewer">
+                    <img id="activeMaskImg" src="" alt="Active Mask Overlay">
+                </div>
+            </div>
+
+            <!-- Clinical Disclaimer Card -->
+            <div class="card disclaimer-card">
+                <p><strong>Statutory Clinical Disclaimer:</strong> This web tool is an automated microvascular screening aid developed for preliminary risk assessment. It does NOT constitute a definitive diagnosis of Diabetes Mellitus. Diagnostic confirmation requires standard laboratory fasting plasma glucose or glycated hemoglobin (HbA1c) testing conducted by a certified clinical laboratory.</p>
+            </div>
+
+            <!-- Actions Bar -->
+            <div class="actions-bar">
+                <button class="btn btn-primary" onclick="window.print()">🖨️ Print Clinical Report</button>
+                <button class="btn btn-secondary" id="btnResetAll">🔄 Screen Another Patient</button>
+            </div>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <p>© 2026 ConjuVascular AI Project | Deep Learning Microvascular Screening</p>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

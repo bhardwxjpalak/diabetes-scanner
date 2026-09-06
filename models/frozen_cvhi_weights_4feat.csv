@@ -1,0 +1,5 @@
+biomarker,shap_weight,direction_formula_sign
+total_vessel_length,0.43676496,+w1
+mba,0.30481678,+w2
+fractal_dimension,0.03998948,+w3
+lacunarity,0.21842882,-w4
