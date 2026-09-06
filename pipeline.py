@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 import xgboost as xgb
-import joblib
 from scipy.ndimage import label as ndlabel
 from skimage.morphology import skeletonize
 
@@ -15,9 +14,7 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 ROI_ONNX_PATH = os.path.join(MODELS_DIR, "ghostnet_roi_segmentation.onnx")
 VESSEL_ONNX_PATH = os.path.join(MODELS_DIR, "ghostnet_vessel_segmentation.onnx")
 XGB_JSON_PATH = os.path.join(MODELS_DIR, "frozen_xgb_4feat.json")
-SCALER_PKL_PATH = os.path.join(MODELS_DIR, "frozen_scaler_4feat.pkl")
-
-# Standardizer fallback constants if pickle isn't used
+# Standardizer constants extracted from frozen StandardScaler
 SCALER_MEANS = np.array([329.059649122807, 95.66816085726683, 0.8499133983694536, 64.13531100765384])
 SCALER_SCALES = np.array([227.61344053752006, 56.065201873146215, 0.17529670856766813, 72.56871416835884])
 
@@ -42,11 +39,6 @@ class PipelineService:
         print("[*] Loading Frozen XGBoost Classifier...")
         self.xgb_model = xgb.Booster()
         self.xgb_model.load_model(XGB_JSON_PATH)
-
-        if os.path.exists(SCALER_PKL_PATH):
-            self.scaler = joblib.load(SCALER_PKL_PATH)
-        else:
-            self.scaler = None
 
     def check_quality(self, img_rgb: np.ndarray, blur_threshold: float = 25.0) -> dict:
         """Stage 1: Image Quality Assessment."""
@@ -263,11 +255,7 @@ class PipelineService:
     def classify(self, biomarkers: dict) -> dict:
         """Stage 6: Z-Score standardization, XGBoost inference, and CVHI score."""
         raw_vec = np.array([biomarkers["tvl"], biomarkers["mba"], biomarkers["fd"], biomarkers["lac"]])
-
-        if self.scaler is not None:
-            z_features = self.scaler.transform(raw_vec.reshape(1, -1))[0]
-        else:
-            z_features = (raw_vec - SCALER_MEANS) / SCALER_SCALES
+        z_features = (raw_vec - SCALER_MEANS) / SCALER_SCALES
 
         dmat = xgb.DMatrix(z_features.reshape(1, -1))
         prob = float(self.xgb_model.predict(dmat)[0])
