@@ -48,9 +48,10 @@ async def serve_dashboard():
 async def health_check():
     return {
         "status": "healthy",
+        "version": "1.1.0-otsu-fallback",
         "service": "conjunctival-diabetes-screener",
         "models": {
-            "roi_segmentation": "GhostNet-U-Net (ONNX)",
+            "roi_segmentation": "GhostNet-U-Net + Sclera Otsu Morphological Fallback (ONNX)",
             "vessel_segmentation": "GhostNet-U-Net (ONNX)",
             "classifier": "Tuned Regularized XGBoost (4 Features)"
         }
