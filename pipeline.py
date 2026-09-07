@@ -5,7 +5,7 @@ import numpy as np
 import onnxruntime as ort
 import xgboost as xgb
 from scipy.ndimage import label as ndlabel
-from skimage.morphology import skeletonize
+from skimage.morphology import skeletonize, closing, opening, remove_small_objects, disk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
@@ -63,28 +63,28 @@ class PipelineService:
                 "reason": f"Image is blurry (Laplacian variance {laplacian_var:.1f} < {blur_threshold}). Please hold camera steady and tap to focus.",
                 "metrics": {"blur": laplacian_var, "mean": mean_intensity, "contrast": std_intensity, "glare": glare_ratio}
             }
-        if mean_intensity < 45.0:
+        if mean_intensity < 20.0:
             return {
                 "pass": False,
-                "reason": f"Image is too dark (mean intensity {mean_intensity:.1f} < 45.0). Enable flash or move to better lighting.",
+                "reason": f"Image is too dark (mean intensity {mean_intensity:.1f} < 20.0). Enable flash or move to better lighting.",
                 "metrics": {"blur": laplacian_var, "mean": mean_intensity, "contrast": std_intensity, "glare": glare_ratio}
             }
-        if mean_intensity > 220.0:
+        if mean_intensity > 235.0:
             return {
                 "pass": False,
-                "reason": f"Image is overexposed (mean intensity {mean_intensity:.1f} > 220.0). Avoid direct reflection.",
+                "reason": f"Image is overexposed (mean intensity {mean_intensity:.1f} > 235.0). Avoid direct reflection.",
                 "metrics": {"blur": laplacian_var, "mean": mean_intensity, "contrast": std_intensity, "glare": glare_ratio}
             }
-        if std_intensity < 15.0:
+        if std_intensity < 10.0:
             return {
                 "pass": False,
-                "reason": f"Image contrast is too low (std {std_intensity:.1f} < 15.0). Ensure the sclera is centered.",
+                "reason": f"Image contrast is too low (std {std_intensity:.1f} < 10.0). Ensure the sclera is centered.",
                 "metrics": {"blur": laplacian_var, "mean": mean_intensity, "contrast": std_intensity, "glare": glare_ratio}
             }
-        if glare_ratio > 0.05:
+        if glare_ratio > 0.10:
             return {
                 "pass": False,
-                "reason": f"Specular glare detected ({glare_ratio*100:.1f}% > 5.0%). Tilt camera slightly to eliminate hotspot.",
+                "reason": f"Specular glare detected ({glare_ratio*100:.1f}% > 10.0%). Tilt camera slightly to eliminate hotspot.",
                 "metrics": {"blur": laplacian_var, "mean": mean_intensity, "contrast": std_intensity, "glare": glare_ratio}
             }
 
@@ -120,36 +120,80 @@ class PipelineService:
         tensor = norm[np.newaxis, np.newaxis, ...]
         return tensor
 
-    def segment_roi(self, roi_tensor: np.ndarray) -> np.ndarray:
-        """Stage 3: GhostNet ROI segmentation."""
-        input_name = self.roi_session.get_inputs()[0].name
-        preds = self.roi_session.run(None, {input_name: roi_tensor})[0]
-        # output shape is [1, 1, 256, 256]
-        prob_map = preds[0, 0]
-        binary_mask = (prob_map >= 0.50).astype(np.uint8) * 255
+    def segment_roi(self, img_rgb: np.ndarray, roi_tensor: np.ndarray) -> np.ndarray:
+        """Stage 3: Sclera / Conjunctiva ROI segmentation.
+        
+        Attempts GhostNet deep learning segmentation; if the model produces an
+        empty or unreliable mask (common across varying camera fields of view),
+        automatically falls back to the IEEE dataset benchmark Otsu morphological
+        sclera segmenter (01_generate_roi_masks.py).
+        """
+        binary_mask = None
+        try:
+            input_name = self.roi_session.get_inputs()[0].name
+            preds = self.roi_session.run(None, {input_name: roi_tensor})[0]
+            prob_map = preds[0, 0]
+            if np.count_nonzero(prob_map >= 0.30) > 100:
+                binary_mask = (prob_map >= 0.30).astype(np.uint8) * 255
+        except Exception:
+            binary_mask = None
+
+        # Fallback to Otsu morphological sclera segmentation (from IEEE pipeline)
+        if binary_mask is None or np.count_nonzero(binary_mask) < 200:
+            gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+            gray_256 = cv2.resize(gray, (256, 256), interpolation=cv2.INTER_LINEAR)
+            blurred = cv2.GaussianBlur(gray_256, (5, 5), 0)
+            _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+            if num_labels <= 1:
+                binary_mask = binary
+            else:
+                areas = stats[1:, cv2.CC_STAT_AREA]
+                largest_label = 1 + int(np.argmax(areas))
+                binary_mask = np.zeros_like(binary)
+                binary_mask[labels == largest_label] = 255
+
+            mask_inv = cv2.bitwise_not(binary_mask)
+            flood = mask_inv.copy()
+            h, w = flood.shape
+            flood_mask = np.zeros((h + 2, w + 2), np.uint8)
+            cv2.floodFill(flood, flood_mask, (0, 0), 255)
+            holes = cv2.bitwise_not(flood)
+            binary_mask = cv2.bitwise_or(binary_mask, holes)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            binary_mask = cv2.erode(binary_mask, kernel, iterations=1)
+
         return binary_mask
 
     def segment_vessel(self, vessel_tensor: np.ndarray, roi_mask_256: np.ndarray) -> np.ndarray:
-        """Stage 4: GhostNet Vessel segmentation with ROI constraint."""
+        """Stage 4: GhostNet Vessel segmentation with ROI constraint & morphological refinement."""
         input_name = self.vessel_session.get_inputs()[0].name
         preds = self.vessel_session.run(None, {input_name: vessel_tensor})[0]
         # output shape is [1, 1, 512, 512]
         prob_map = preds[0, 0]
 
         scaled_roi = cv2.resize(roi_mask_256, (512, 512), interpolation=cv2.INTER_NEAREST)
-        raw_mask = (prob_map >= 0.35) & (scaled_roi > 127)
+        roi_pos = np.count_nonzero(scaled_roi > 127)
 
-        # Remove small components < 50 pixels
-        labeled, num_features = ndlabel(raw_mask)
-        if num_features > 0:
-            sizes = np.bincount(labeled.ravel())
-            mask_sizes = sizes >= 50
-            mask_sizes[0] = 0
-            clean_mask = mask_sizes[labeled]
+        # If ROI is available, constrain to ROI; otherwise use full field
+        if roi_pos > 500:
+            raw_mask = (prob_map >= 0.35) & (scaled_roi > 127)
         else:
-            clean_mask = raw_mask
+            raw_mask = (prob_map >= 0.35)
 
-        return clean_mask.astype(np.uint8) * 255
+        # Fallback if threshold is slightly too strict
+        if np.count_nonzero(raw_mask) < 20:
+            if roi_pos > 500:
+                raw_mask = (prob_map >= 0.25) & (scaled_roi > 127)
+            else:
+                raw_mask = (prob_map >= 0.25)
+
+        # Morphological postprocessing (closing, remove small objects, opening)
+        cleaned = closing(raw_mask.astype(bool), disk(2))
+        cleaned = remove_small_objects(cleaned, min_size=25)
+        cleaned = opening(cleaned, disk(1))
+
+        return cleaned.astype(np.uint8) * 255
 
     def extract_biomarkers(self, vessel_mask: np.ndarray) -> dict:
         """Stage 5: 4-Biomarker extraction."""
@@ -307,7 +351,7 @@ class PipelineService:
         vessel_tensor = self.preprocess_vessel(img_rgb)
 
         # Stage 3: ROI Segmentation
-        roi_mask = self.segment_roi(roi_tensor)
+        roi_mask = self.segment_roi(img_rgb, roi_tensor)
 
         # Stage 4: Vessel Segmentation
         vessel_mask = self.segment_vessel(vessel_tensor, roi_mask)
@@ -320,7 +364,7 @@ class PipelineService:
 
         # Overlays for clinical visualization
         resized_orig = cv2.resize(img_rgb, (512, 512))
-        scaled_roi = cv2.resize(roi_mask, (512, 512))
+        scaled_roi = cv2.resize(roi_mask, (512, 512), interpolation=cv2.INTER_NEAREST)
 
         # 1. ROI overlay: translucent blue
         roi_overlay = resized_orig.copy()
@@ -333,7 +377,11 @@ class PipelineService:
         vessel_overlay[vessel_indices] = [255, 30, 30]
 
         def to_b64(cv_img):
-            _, buf = cv2.imencode('.png', cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR))
+            if len(cv_img.shape) == 2:
+                img_to_encode = cv2.cvtColor(cv_img, cv2.COLOR_GRAY2BGR)
+            else:
+                img_to_encode = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
+            _, buf = cv2.imencode('.png', img_to_encode)
             return "data:image/png;base64," + base64.b64encode(buf).decode('utf-8')
 
         return {
